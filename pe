@@ -1,0 +1,557 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local plr = Players.LocalPlayer
+local pg = plr.PlayerGui
+
+-- 清理旧UI
+local oldGui = pg:FindFirstChild("MiniESP")
+if oldGui then oldGui:Destroy() end
+local oldToggle = pg:FindFirstChild("MiniESP_Toggle")
+if oldToggle then oldToggle:Destroy() end
+local tpGui = pg:FindFirstChild("TPList")
+if tpGui then tpGui:Destroy() end
+
+-- 开关
+local showNPC = true
+local showPrompt = true
+local showClick = true
+local showItems = true
+local godmode = false
+local clickKill = false
+local respawnAtDeath = false
+
+local espList = {}
+local itemList = {}
+local registered = {}
+local searchKeyword = ""
+local deathCFrame = nil
+
+-- 清除ESP
+local function clearAllESP()
+    for _, d in Workspace:GetDescendants() do
+        if d.Name == "ESP_HL" or d.Name == "ESP_Text" then d:Destroy() end
+    end
+end
+
+-- 找最近Part
+local function findNearestPart(obj)
+    if not obj then return nil end
+    for _ = 1, 50 do
+        if obj:IsA("BasePart") then return obj end
+        obj = obj.Parent
+        if not obj then break end
+    end
+    return nil
+end
+
+-- 绘制ESP
+local function drawESP(part, text, color)
+    if not part or not part:IsA("BasePart") or not part:IsDescendantOf(Workspace) then return end
+
+    local hl = part:FindFirstChild("ESP_HL") or Instance.new("Highlight")
+    hl.Name = "ESP_HL"
+    hl.FillTransparency = 0.7
+    hl.OutlineColor = color
+    hl.FillColor = Color3.new(0,1,1)
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = part
+
+    local bg = part:FindFirstChild("ESP_Text") or Instance.new("BillboardGui")
+    bg.Name = "ESP_Text"
+    bg.Adornee = part
+    bg.Size = UDim2.new(0,140,0,24)
+    bg.StudsOffset = Vector3.new(0,2.2,0)
+    bg.AlwaysOnTop = true
+    bg.Parent = part
+
+    local txt = bg:FindFirstChild("TextLabel") or Instance.new("TextLabel")
+    txt.Size = UDim2.new(1,0,1,0)
+    txt.BackgroundTransparency = 1
+    if color == Color3.new(0,1,0) then
+        txt.TextColor3 = Color3.new(1,1,1)
+    else
+        txt.TextColor3 = color
+    end
+    txt.TextSize = 14
+    txt.TextStrokeTransparency = 0
+    txt.TextStrokeColor3 = Color3.new(0,0,0)
+    txt.Parent = bg
+end
+
+local function getUniqueId(part)
+    if not part then return nil end
+    return string.format("%s_%s", part:GetFullName(), tostring(part.Position))
+end
+
+-- 扫描
+local function scanAll()
+    clearAllESP()
+    table.clear(espList)
+    table.clear(itemList)
+    table.clear(registered)
+
+    for _, obj in Workspace:GetDescendants() do
+        local part, displayName, objType = nil, nil, nil
+        if obj:IsA("ProximityPrompt") then
+            part = findNearestPart(obj)
+            if part then displayName = "[E] "..part.Name; objType = "prompt" end
+        elseif obj:IsA("ClickDetector") then
+            part = findNearestPart(obj)
+            if part then displayName = "[C] "..part.Name; objType = "click" end
+        elseif obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+            local isPlayer = false
+            for _, p in Players:GetPlayers() do if p.Character == obj then isPlayer = true break end end
+            if not isPlayer then
+                part = obj.PrimaryPart or findNearestPart(obj)
+                if part then displayName = "[NPC] "..obj.Name; objType = "npc" end
+            end
+        elseif obj:IsA("Tool") or obj:IsA("Part") then
+            local isItem = obj.Name:lower():find("item") or obj.Name:lower():find("tool") or obj.Name:lower():find("key")
+            if isItem then
+                part = obj:IsA("BasePart") and obj or findNearestPart(obj)
+                if part then displayName = "[ITEM] "..obj.Name; objType = "item" end
+            end
+        end
+
+        if part and objType and displayName then
+            local uid = getUniqueId(part)
+            if uid and not registered[uid] then
+                registered[uid] = true
+                table.insert(espList, {name=displayName, part=part, type=objType})
+                if objType == "item" then table.insert(itemList, {name=displayName, part=part}) end
+            end
+        end
+    end
+
+    for _, v in ipairs(espList) do
+        if v.part and v.part:IsDescendantOf(Workspace) then
+            local c = Color3.new(1,1,1)
+            if v.type == "npc" then c=Color3.new(1,1,0) end
+            if v.type == "prompt" then c=Color3.new(0,1,0) end
+            if v.type == "click" then c=Color3.new(1,0,0) end
+            if v.type == "item" then c=Color3.new(0,1,1) end
+            drawESP(v.part, v.name, c)
+        end
+    end
+
+    updateItemList()
+    updateList()
+    updateButtonColors()
+end
+
+-- 实时更新距离
+function updateVisual()
+    local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    for _, v in ipairs(espList) do
+        if not v.part or not v.part:IsDescendantOf(Workspace) then continue end
+        local show = false
+        if v.type == "npc" and showNPC then show = true end
+        if v.type == "prompt" and showPrompt then show = true end
+        if v.type == "click" and showClick then show = true end
+        if v.type == "item" and showItems then show = true end
+
+        local txt = v.part:FindFirstChild("ESP_Text") and v.part.ESP_Text:FindFirstChild("TextLabel")
+        if txt then
+            if show then
+                local dist = math.floor((v.part.Position - root.Position).Magnitude)
+                txt.Text = string.format("%s [距离:%s]", v.name, dist)
+                txt.Visible = true
+                local hl = v.part:FindFirstChild("ESP_HL")
+                if hl then hl.Enabled = true end
+            else
+                txt.Visible = false
+                local hl = v.part:FindFirstChild("ESP_HL")
+                if hl then hl.Enabled = false end
+            end
+        end
+    end
+end
+
+-- 无碰撞
+local function setCollide(state)
+    if not plr.Character then return end
+    for _, v in plr.Character:GetDescendants() do
+        if v:IsA("BasePart") then
+            v.CanCollide = state
+            v.CanTouch = state
+            v.CanQuery = state
+        end
+    end
+end
+
+-- 复活
+plr.CharacterAdded:Connect(function(char)
+    repeat task.wait() until char:FindFirstChild("HumanoidRootPart") and char:FindFirstChildOfClass("Humanoid")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char.HumanoidRootPart
+
+    hum.Died:Connect(function()
+        deathCFrame = root.CFrame
+        if respawnAtDeath then
+            plr:LoadCharacter()
+        end
+    end)
+
+    if respawnAtDeath and deathCFrame then
+        task.wait(0.2)
+        root.CFrame = deathCFrame * CFrame.new(0,1,0)
+    end
+
+    if godmode then setCollide(false) end
+end)
+
+-- 点杀
+UserInputService.TouchTap:Connect(function(touchPositions)
+    if not clickKill or not plr.Character then return end
+    local cam = Workspace.CurrentCamera
+    local pos = touchPositions[1]
+    local ray = cam:ViewportPointToRay(pos.X, pos.Y)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {plr.Character}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local res = Workspace:Raycast(ray.Origin, ray.Direction*5000, params)
+    if res then
+        local char = res.Instance:FindFirstAncestorOfClass("Model")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            local isPlayer = false
+            for _, p in Players:GetPlayers() do if p.Character == char then isPlayer = true break end end
+            if not isPlayer then hum.Health = 0 end
+        end
+    end
+end)
+
+-- ==================== 主UI（已经缩短） ====================
+local gui = Instance.new("ScreenGui")
+gui.Name = "MiniESP"
+gui.ResetOnSpawn = false
+gui.Parent = pg
+
+local window = Instance.new("Frame")
+window.Name = "Window"
+window.Size = UDim2.new(0, 240, 0, 340) -- 明显缩短
+window.Position = UDim2.new(0, 10, 0, 10)
+window.BackgroundColor3 = Color3.new(0.1,0.1,0.12)
+window.BackgroundTransparency = 0.1
+window.Visible = true
+window.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0,8)
+corner.Parent = window
+
+local bar = Instance.new("TextLabel")
+bar.Size = UDim2.new(1,0,0,28)
+bar.BackgroundTransparency = 1
+bar.Text = "ESP Panel (拖动)"
+bar.TextColor3 = Color3.new(1,1,1)
+bar.TextSize = 16
+bar.Parent = window
+
+local buttons = {}
+
+local function MakeButton(name, txt, x, y, callback)
+    local b = Instance.new("TextButton")
+    b.Name = name
+    b.Size = UDim2.new(0, 110, 0, 36)
+    b.Position = UDim2.new(0, x, 0, y)
+    b.Text = txt
+    b.TextColor3 = Color3.new(1,1,1)
+    b.TextSize = 15
+    b.Parent = window
+    b.MouseButton1Click:Connect(callback)
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(0,6)
+    bc.Parent = b
+    buttons[name] = b
+end
+
+MakeButton("scan", "🔄 扫描", 5, 35, scanAll)
+MakeButton("god", "⭐ 无碰撞", 125, 35,function()
+    godmode = not godmode
+    setCollide(not godmode)
+    updateButtonColors()
+end)
+
+MakeButton("npc", "👤 NPC",5,77,function()
+    showNPC = not showNPC
+    updateButtonColors()
+end)
+MakeButton("prompt", "💬 互动",125,77,function()
+    showPrompt = not showPrompt
+    updateButtonColors()
+end)
+
+MakeButton("click", "🔴 点击",5,119,function()
+    showClick = not showClick
+    updateButtonColors()
+end)
+MakeButton("item", "📦 物品",125,119,function()
+    showItems = not showItems
+    updateButtonColors()
+end)
+
+MakeButton("clickkill", "🩸 点杀",5,161,function()
+    clickKill = not clickKill
+    updateButtonColors()
+end)
+MakeButton("respawn", "♻️ 复活",125,161,function()
+    respawnAtDeath = not respawnAtDeath
+    updateButtonColors()
+end)
+
+function updateButtonColors()
+    buttons.god.BackgroundColor3 = godmode and Color3.new(1,0.6,0) or Color3.new(0.15,0.15,0.15)
+    buttons.npc.BackgroundColor3 = showNPC and Color3.new(0,0.6,0) or Color3.new(0.15,0.15,0.15)
+    buttons.prompt.BackgroundColor3 = showPrompt and Color3.new(0,0.6,0) or Color3.new(0.15,0.15,0.15)
+    buttons.click.BackgroundColor3 = showClick and Color3.new(1,0,0) or Color3.new(0.15,0.15,0.15)
+    buttons.item.BackgroundColor3 = showItems and Color3.new(0,0.6,0) or Color3.new(0.15,0.15,0.15)
+    buttons.clickkill.BackgroundColor3 = clickKill and Color3.new(0.5,0,0) or Color3.new(0.15,0.15,0.15)
+    buttons.respawn.BackgroundColor3 = respawnAtDeath and Color3.new(0,0.7,1) or Color3.new(0.15,0.15,0.15)
+end
+
+-- 物品列表
+local itemFrame = Instance.new("Frame")
+itemFrame.Size = UDim2.new(1,-10,0,140)
+itemFrame.Position = UDim2.new(0,5,0,205)
+itemFrame.BackgroundTransparency = 1
+itemFrame.Parent = window
+
+local itemTitle = Instance.new("TextLabel")
+itemTitle.Size = UDim2.new(1,0,0,20)
+itemTitle.BackgroundTransparency = 1
+itemTitle.Text = "物品列表"
+itemTitle.TextColor3 = Color3.new(0.9,0.9,0.9)
+itemTitle.TextSize = 14
+itemTitle.Parent = itemFrame
+
+local itemScroll = Instance.new("ScrollingFrame")
+itemScroll.Size = UDim2.new(1,0,1,-20)
+itemScroll.Position = UDim2.new(0,0,0,20)
+itemScroll.BackgroundTransparency = 1
+itemScroll.ScrollBarThickness = 4
+itemScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+itemScroll.Parent = itemFrame
+
+local ilay = Instance.new("UIListLayout")
+ilay.Parent = itemScroll
+ilay.SortOrder = Enum.SortOrder.Name
+ilay.Padding = UDim.new(0,3)
+
+function updateItemList()
+    for _, c in itemScroll:GetChildren() do if c:IsA("TextLabel") then c:Destroy() end end
+    for _, v in ipairs(itemList) do
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(1,0,0,24)
+        t.BackgroundTransparency = 1
+        t.Text = "• "..v.name
+        t.TextColor3 = Color3.new(1,1,1)
+        t.TextSize = 14
+        t.Parent = itemScroll
+        t.TextXAlignment = Enum.TextXAlignment.Center
+        t.TextTruncate = Enum.TextTruncate.AtEnd
+    end
+end
+
+-- 面板拖动
+local drag = false
+local offset = Vector2.new(0,0)
+bar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        drag = true
+        offset = Vector2.new(input.Position.X - window.AbsolutePosition.X, input.Position.Y - window.AbsolutePosition.Y)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if drag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        window.Position = UDim2.new(0, input.Position.X - offset.X, 0, input.Position.Y - offset.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        drag = false
+    end
+end)
+
+-- ==================== 传送列表 · 独立UI ====================
+local tpGui = Instance.new("ScreenGui")
+tpGui.Name = "TPList"
+tpGui.ResetOnSpawn = false
+tpGui.Parent = pg
+
+local tpWindow = Instance.new("Frame")
+tpWindow.Name = "TPWindow"
+tpWindow.Size = UDim2.new(0, 240, 0, 260)
+tpWindow.Position = UDim2.new(0, 260, 0, 10)
+tpWindow.BackgroundColor3 = Color3.new(0.1,0.1,0.12)
+tpWindow.BackgroundTransparency = 0.1
+tpWindow.Visible = true
+tpWindow.Parent = tpGui
+
+local tpCorner = Instance.new("UICorner")
+tpCorner.CornerRadius = UDim.new(0,8)
+tpCorner.Parent = tpWindow
+
+local tpBar = Instance.new("TextLabel")
+tpBar.Size = UDim2.new(1,0,0,28)
+tpBar.BackgroundTransparency = 1
+tpBar.Text = "传送列表 (拖动)"
+tpBar.TextColor3 = Color3.new(1,1,1)
+tpBar.TextSize = 16
+tpBar.Parent = tpWindow
+
+local tpFrame = Instance.new("Frame")
+tpFrame.Size = UDim2.new(1,-10,0,220)
+tpFrame.Position = UDim2.new(0,5,0,30)
+tpFrame.BackgroundTransparency = 1
+tpFrame.Parent = tpWindow
+
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(1,0,0,26)
+searchBox.Position = UDim2.new(0,0,0,0)
+searchBox.BackgroundColor3 = Color3.new(0.15,0.15,0.18)
+searchBox.BackgroundTransparency = 0.2
+searchBox.TextColor3 = Color3.new(1,1,1)
+searchBox.PlaceholderText = "搜索..."
+searchBox.PlaceholderColor3 = Color3.new(0.6,0.6,0.6)
+searchBox.TextSize = 14
+searchBox.Parent = tpFrame
+
+local searchCorner = Instance.new("UICorner")
+searchCorner.CornerRadius = UDim.new(0,6)
+searchCorner.Parent = searchBox
+
+local tpScroll = Instance.new("ScrollingFrame")
+tpScroll.Size = UDim2.new(1,0,1,-30)
+tpScroll.Position = UDim2.new(0,0,0,30)
+tpScroll.BackgroundTransparency = 1
+tpScroll.ScrollBarThickness = 4
+tpScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+tpScroll.Parent = tpFrame
+
+local tlay = Instance.new("UIListLayout")
+tlay.Parent = tpScroll
+tlay.SortOrder = Enum.SortOrder.Name
+tlay.Padding = UDim.new(0,3)
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    searchKeyword = string.lower(searchBox.Text)
+    updateList()
+end)
+
+function updateList()
+    for _, c in tpScroll:GetChildren() do if c:IsA("TextButton") then c:Destroy() end end
+    local lowerKey = string.lower(searchKeyword or "")
+    for _, v in ipairs(espList) do
+        if not v.part or not v.part:IsDescendantOf(Workspace) then continue end
+        local lowerName = string.lower(v.name or "")
+        if lowerKey == "" or string.find(lowerName, lowerKey, 1, true) then
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1,0,0,26)
+            b.BackgroundTransparency = 1
+            b.Text = v.name
+            b.TextColor3 = Color3.new(1,1,1)
+            b.TextSize = 14
+            b.Parent = tpScroll
+            b.TextXAlignment = Enum.TextXAlignment.Center
+            b.MouseButton1Click:Connect(function()
+                local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                if root and v.part:IsDescendantOf(Workspace) then
+                    root.CFrame = v.part.CFrame * CFrame.new(0,2,-3)
+                end
+            end)
+        end
+    end
+end
+
+-- 传送窗口拖动
+local tpDrag = false
+local tpOffset = Vector2.new(0,0)
+tpBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        tpDrag = true
+        tpOffset = Vector2.new(input.Position.X - tpWindow.AbsolutePosition.X, input.Position.Y - tpWindow.AbsolutePosition.Y)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if tpDrag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        tpWindow.Position = UDim2.new(0, input.Position.X - tpOffset.X, 0, input.Position.Y - tpOffset.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        tpDrag = false
+    end
+end)
+
+-- ==================== 手机悬浮按钮 ====================
+local toggleGui = Instance.new("ScreenGui")
+toggleGui.Name = "MiniESP_Toggle"
+toggleGui.ResetOnSpawn = false
+toggleGui.Parent = pg
+
+local dragArea = Instance.new("Frame")
+dragArea.Name = "DragArea"
+dragArea.Size = UDim2.new(0,120,0,120)
+dragArea.Position = UDim2.new(0, 250, 0, 20)
+dragArea.BackgroundTransparency = 1
+dragArea.Parent = toggleGui
+
+local toggleContainer = Instance.new("Frame")
+toggleContainer.Size = UDim2.new(1,0,1,0)
+toggleContainer.BackgroundTransparency = 1
+toggleContainer.Parent = dragArea
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "TogglePanel"
+toggleBtn.Size = UDim2.new(0,70,0,70)
+toggleBtn.Position = UDim2.new(0.5,-35,0.5,-35)
+toggleBtn.BackgroundColor3 = Color3.new(0.15,0.15,0.15)
+toggleBtn.BackgroundTransparency = 0.3
+toggleBtn.Text = "📌"
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.TextSize = 26
+toggleBtn.Parent = toggleContainer
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0,8)
+btnCorner.Parent = toggleBtn
+
+local stroke = Instance.new("UIStroke")
+stroke.Thickness = 1
+stroke.Color = Color3.new(0.5,0.5,0.5)
+stroke.Parent = toggleBtn
+
+local toggleDrag = false
+local toggleOffset = Vector2.new(0,0)
+dragArea.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        toggleDrag = true
+        toggleOffset = Vector2.new(input.Position.X - dragArea.AbsolutePosition.X, input.Position.Y - dragArea.AbsolutePosition.Y)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if toggleDrag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        dragArea.Position = UDim2.new(0, input.Position.X - toggleOffset.X, 0, input.Position.Y - toggleOffset.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        toggleDrag = false
+    end
+end)
+
+toggleBtn.MouseButton1Click:Connect(function()
+    window.Visible = not window.Visible
+    tpWindow.Visible = not tpWindow.Visible
+end)
+
+-- 刷新
+RunService.RenderStepped:Connect(updateVisual)
+
+scanAll()
+updateButtonColors()
