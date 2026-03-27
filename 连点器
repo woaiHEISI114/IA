@@ -1,25 +1,26 @@
--- GC连点器 iPad/Delta适配版 - 解决点击无效 | 触控/鼠标通用
+-- GC连点器 iPad/Delta适配版 - 无弹窗+右侧CPS可拖动 | 触控/鼠标通用
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager") -- 核心：iPad/Delta通用点击
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local LocalPlayer = Players.LocalPlayer or game.Players:WaitForChild("LocalPlayer")
 
 -- 基础设置（适配iPad小屏，简化参数）
 local Settings = {
-    CPS = 10,       -- 初始点击速度，iPad建议5-15
-    ButtonSize = 70,-- 点击按钮大小，适配平板触控
+    CPS = 10,
+    ButtonSize = 70,
     Enabled = false,
     Dragging = false,
-    ClickPos = Vector2.new(0, 0)
+    ClickPos = Vector2.new(0, 0),
+    CPSPanelDragging = false -- 新增：CPS面板拖动标记
 }
 
 -- 主GUI（注入器通用，挂CoreGui避免被清）
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "GC_Clicker_iPad_Delta"
 ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = game.CoreGui -- 替换PlayerGui为CoreGui，Delta注入更稳定
+ScreenGui.Parent = game.CoreGui
 
 -- 左侧工具栏（缩小适配iPad，位置左贴边）
 local Toolbar = Instance.new("Frame")
@@ -34,7 +35,7 @@ ToolbarCorner.Parent = Toolbar
 
 -- 工具栏按钮（Play/Pause + 按钮放大/缩小）
 local Buttons = {}
-local icons = {"Play", "＋", "－"} -- 简化为3个核心按钮，适配平板操作
+local icons = {"Play", "＋", "－"}
 for i, icon in ipairs(icons) do
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(0, 50, 0, 50)
@@ -67,13 +68,14 @@ local pulse = TweenService:Create(ClickButton, TweenInfo.new(1.2, Enum.EasingSty
 })
 pulse:Play()
 
--- CPS调节面板（右侧贴边，iPad竖屏适配）
+-- CPS调节面板（右侧贴边，可拖动，iPad竖屏适配）
 local CPSPanel = Instance.new("Frame")
 CPSPanel.Size = UDim2.new(0, 60, 0, 160)
 CPSPanel.Position = UDim2.new(1, -65, 0.5, -80)
 CPSPanel.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
 CPSPanel.BackgroundTransparency = 0.2
 CPSPanel.Visible = false
+CPSPanel.Active = true -- 新增：开启交互，支持拖动
 CPSPanel.Parent = ScreenGui
 local CPSCorner = Instance.new("UICorner")
 CPSCorner.CornerRadius = UDim.new(0, 30)
@@ -98,27 +100,24 @@ SliderCorner.CornerRadius = UDim.new(0, 20)
 SliderCorner.Parent = Slider
 -- 滑块进度条
 local Fill = Instance.new("Frame")
-Fill.Size = UDim2.new(1, 0, (Settings.CPS - 1) / 29, 0) -- CPS范围1-30，适配iPad点击速度
+Fill.Size = UDim2.new(1, 0, (Settings.CPS - 1) / 29, 0)
 Fill.BackgroundColor3 = Color3.fromRGB(0, 180, 255)
 Fill.Parent = Slider
 local FillCorner = Instance.new("UICorner")
 FillCorner.CornerRadius = UDim.new(0, 20)
 FillCorner.Parent = Fill
 
--- 🔴核心点击逻辑（VirtualInputManager底层模拟，iPad/Delta100%有效）
+-- 核心点击逻辑（VirtualInputManager底层模拟，iPad/Delta100%有效）
 local ClickConnection
 local function StartClicker()
     if ClickConnection then return end
-    -- 用Heartbeat驱动，和游戏帧同步，避免点击失效
     ClickConnection = RunService.Heartbeat:Connect(function()
         if Settings.Enabled and Settings.ClickPos.X ~= 0 and Settings.ClickPos.Y ~= 0 then
             local x = Settings.ClickPos.X
             local y = Settings.ClickPos.Y
-            -- 模拟鼠标/触控按下 + 抬起，完整点击流程（Delta/iPad必加）
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.005) -- 极小延迟，模拟真实点击，避免被屏蔽
+            task.wait(0.005)
             VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-            -- 按CPS计算间隔，适配平板性能
             task.wait(math.max(1 / Settings.CPS - 0.01, 0.01))
         end
     end)
@@ -152,26 +151,19 @@ local function UpdateButtonSize()
     UpdateClickPosition()
 end
 
--- 📱工具栏按钮功能（平板触控友好）
--- 1. Play/Pause 开关
+-- 工具栏按钮功能（平板触控友好，删除所有弹窗）
+-- 1. Play/Pause 开关（无弹窗）
 Buttons[1].MouseButton1Click:Connect(function()
     Settings.Enabled = not Settings.Enabled
     if Settings.Enabled then
         Buttons[1].Text = "Pause"
-        ClickButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100) -- 绿色=运行中
-        UpdateClickPosition() -- 点击开始时重新获取坐标，避免拖动失效
+        ClickButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        UpdateClickPosition()
         StartClicker()
-        -- 弹出通知，iPad端提示
-        pcall(function()
-            game.StarterGui:SetCore("SendNotification", {Title = "连点器", Text = "已开启 | CPS："..Settings.CPS, Duration = 1.5})
-        end)
     else
         Buttons[1].Text = "Play"
-        ClickButton.BackgroundColor3 = Color3.fromRGB(60, 110, 255) -- 蓝色=暂停
+        ClickButton.BackgroundColor3 = Color3.fromRGB(60, 110, 255)
         StopClicker()
-        pcall(function()
-            game.StarterGui:SetCore("SendNotification", {Title = "连点器", Text = "已暂停", Duration = 1.5})
-        end)
     end
 end)
 -- 2. 放大点击按钮
@@ -185,42 +177,61 @@ Buttons[3].MouseButton1Click:Connect(function()
     UpdateButtonSize()
 end)
 
--- 🔵点击按钮拖动（支持iPad触控/鼠标，拖动流畅不卡顿）
+-- 点击按钮拖动（支持iPad触控/鼠标，拖动流畅不卡顿）
 ClickButton.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
         Settings.Dragging = true
-        input:Destroy() -- 剔除冗余输入，平板拖动更顺
+        input:Destroy()
     end
 end)
 ClickButton.InputChanged:Connect(function(input)
     if Settings.Dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-        -- 触控/鼠标位置同步，适配平板屏幕坐标
         local targetX = input.Position.X - Settings.ButtonSize/2
         local targetY = input.Position.Y - Settings.ButtonSize/2
         ClickButton.Position = UDim2.new(0, targetX, 0, targetY)
-        UpdateClickPosition() -- 实时更新点击坐标
+        UpdateClickPosition()
     end
 end)
 ClickButton.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
         Settings.Dragging = false
-        CPSPanel.Visible = not CPSPanel.Visible -- 松开显示/隐藏CPS面板
+        CPSPanel.Visible = not CPSPanel.Visible
     end
 end)
 
--- 🟢CPS滑块调节（iPad触控优先，滑动顺滑）
+-- 新增：右侧CPS面板可拖动逻辑（触控/鼠标通用）
+CPSPanel.InputBegan:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and not draggingSlider then
+        Settings.CPSPanelDragging = true
+        local offset = input.Position - CPSPanel.AbsolutePosition
+        Settings.CPSPanelOffset = offset
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if Settings.CPSPanelDragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        local newX = input.Position.X - Settings.CPSPanelOffset.X
+        local newY = input.Position.Y - Settings.CPSPanelOffset.Y
+        CPSPanel.Position = UDim2.new(0, newX, 0, newY)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.CPSPanelDragging = false
+    end
+end)
+
+-- CPS滑块调节（iPad触控优先，滑动顺滑）
 local draggingSlider = false
 Slider.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
         draggingSlider = true
+        Settings.CPSPanelDragging = false -- 滑块拖动时屏蔽面板拖动
     end
 end)
--- 全局输入监听，平板滑动无死角
 UserInputService.InputChanged:Connect(function(input)
     if draggingSlider and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-        -- 计算滑块相对位置，限制范围0-1
         local relY = math.clamp((input.Position.Y - Slider.AbsolutePosition.Y) / Slider.AbsoluteSize.Y, 0, 1)
-        Settings.CPS = math.floor(1 + relY * 29) -- CPS 1-30，iPad建议5-15
+        Settings.CPS = math.floor(1 + relY * 29)
         CPSLabel.Text = tostring(Settings.CPS)
         Fill.Size = UDim2.new(1, 0, relY, 0)
     end
@@ -233,10 +244,7 @@ end)
 
 -- 初始化：启动时获取初始坐标
 UpdateClickPosition()
--- 注入成功提示
+-- 仅控制台打印，无弹窗
 print("✅ GC连点器 iPad/Delta适配版 加载成功！")
-print("📌 拖动「1」按钮到需要点击的位置")
-print("▶️  点击左侧Play开始连点，CPS面板可调节速度")
-pcall(function()
-    game.StarterGui:SetCore("SendNotification", {Title = "加载成功", Text = "拖动「1」定位 | 左侧Play开始", Duration = 3})
-end)
+print("📌 拖动「1」按钮到需要点击的位置 | 右侧CPS面板可拖动")
+print("▶️  左侧Play开始连点 | CPS范围1-30（iPad建议5-15）")
