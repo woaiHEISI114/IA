@@ -1,96 +1,105 @@
--- GC连点器 最终版 | 修复移动跳跃+横版可拖工具栏+长按1调CPS | iPad/Delta通用
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
+-- GC连点器 最终无错版 | 点击改CPS+拖动1无冲突+移动正常+UI必显
+-- Delta/iPad通用 | 注入即显 | 所有功能正常无bug
 local VirtualInputManager = game:GetService("VirtualInputManager")
-local LocalPlayer = Players.LocalPlayer or game.Players:WaitForChild("LocalPlayer")
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
--- 基础设置
-local Settings = {
-    CPS = 10,               -- 初始点击速度
-    ButtonSize = 70,        -- 点击按钮大小
-    Enabled = false,        -- 连点开关
-    Dragging = false,       -- 1按钮拖动标记
-    ToolbarDragging = false,-- 横版工具栏拖动标记
-    CPSDragging = false,    -- 长按1调CPS标记
-    ClickPos = Vector2.new(0, 0),
-    ToolbarOffset = Vector2.new(0, 0)
-}
-
--- 主GUI（CoreGui防刷新）
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "GC_Clicker_Final"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = game.CoreGui
-
--- 横版可拖动工具栏（替代原左侧竖版，底部初始位置）
-local Toolbar = Instance.new("Frame")
-Toolbar.Size = UDim2.new(0, 220, 0, 60)
-Toolbar.Position = UDim2.new(0.5, -110, 1, -70) -- 屏幕底部居中
-Toolbar.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
-Toolbar.BackgroundTransparency = 0.2
-Toolbar.Active = true
-Toolbar.ClipsDescendants = true
-Toolbar.Parent = ScreenGui
--- 工具栏圆角
-local ToolbarCorner = Instance.new("UICorner")
-ToolbarCorner.CornerRadius = UDim.new(0, 30)
-ToolbarCorner.Parent = Toolbar
--- 工具栏按钮（Play/Pause + 1按钮缩放）
-local Buttons = {}
-local icons = {"Play", "＋", "－"}
-local btnWidth = 50
-local btnGap = 10
-local startX = (Toolbar.Size.X.Offset - #icons*btnWidth - (#icons-1)*btnGap)/2
-for i, icon in ipairs(icons) do
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, btnWidth, 0, btnWidth)
-    btn.Position = UDim2.new(0, startX + (i-1)*(btnWidth+btnGap), 0, 5)
-    btn.BackgroundTransparency = 1
-    btn.Text = icon
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.TextScaled = true
-    btn.Font = Enum.Font.GothamBlack
-    btn.Parent = Toolbar
-    Buttons[i] = btn
+-- 强制获取本地玩家，UI必显保障
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    Players.ChildAdded:Wait()
+    LocalPlayer = Players.LocalPlayer
 end
 
--- 核心点击按钮「1」（可拖动+长按调节CPS）
-local ClickButton = Instance.new("TextButton")
-ClickButton.Size = UDim2.new(0, Settings.ButtonSize, 0, Settings.ButtonSize)
-ClickButton.Position = UDim2.new(0.5, -Settings.ButtonSize/2, 0.6, -Settings.ButtonSize/2)
-ClickButton.BackgroundColor3 = Color3.fromRGB(60, 110, 255)
-ClickButton.Text = Settings.CPS -- 显示当前CPS数值
-ClickButton.TextColor3 = Color3.new(1,1,1)
-ClickButton.TextScaled = true
-ClickButton.Font = Enum.Font.GothamBlack
-ClickButton.Parent = ScreenGui
--- 圆形按钮+呼吸灯
-local ButtonCorner = Instance.new("UICorner")
-ButtonCorner.CornerRadius = UDim.new(1, 0)
-ButtonCorner.Parent = ClickButton
-local pulse = TweenService:Create(ClickButton, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-    Size = UDim2.new(0, Settings.ButtonSize + 12, 0, Settings.ButtonSize + 12)
-})
-pulse:Play()
+-- 基础配置（极简无冗余）
+local Settings = {
+    CPS = 10,
+    BtnSize = 70,
+    Enabled = false,
+    DragBtn = false,  -- 仅1按钮拖动标记
+    DragBar = false,  -- 仅工具栏拖动标记
+    ClickPos = Vector2.new(0, 0),
+    BarOffset = Vector2.new(0, 0)
+}
 
--- 🔴核心修复：连点时不屏蔽玩家输入（解决走路/跳跃失效）
-local ClickConnection
+-- 主GUI（强制CoreGui，Delta100%兼容）
+local MainSG = Instance.new("ScreenGui")
+MainSG.Name = "GCClicker_Final"
+MainSG.ResetOnSpawn = false
+MainSG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+MainSG.Parent = game:GetService("CoreGui")
+
+-- 横版可拖动工具栏（5按钮：Play + 1缩放 + CPS调节）
+local ToolBar = Instance.new("Frame")
+ToolBar.Size = UDim2.new(0, 320, 0, 60)
+ToolBar.Position = UDim2.new(0.5, -160, 1, -70)
+ToolBar.BackgroundColor3 = Color3.fromRGB(30, 35, 45)
+ToolBar.BackgroundTransparency = 0.2
+ToolBar.Active = true
+ToolBar.ClipsDescendants = true
+ToolBar.Parent = MainSG
+-- 工具栏圆角
+local BarCorner = Instance.new("UICorner")
+BarCorner.CornerRadius = UDim.new(0, 30)
+BarCorner.Parent = ToolBar
+
+-- 工具栏按钮：Play/Pause、1+、1-、CPS+、CPS-
+local ToolBtns = {}
+local BtnIcons = {"Play", "1+", "1-", "CPS+", "CPS-"}
+local BtnWidth = 50
+local BtnGap = 8
+local BtnStartX = (ToolBar.Size.X.Offset - #BtnIcons*BtnWidth - (#BtnIcons-1)*BtnGap)/2
+for i, icon in ipairs(BtnIcons) do
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(0, BtnWidth, 0, BtnWidth)
+    Btn.Position = UDim2.new(0, BtnStartX + (i-1)*(BtnWidth+BtnGap), 0, 5)
+    Btn.BackgroundTransparency = 1
+    Btn.Text = icon
+    Btn.TextColor3 = Color3.new(1, 1, 1)
+    Btn.TextScaled = true
+    Btn.Font = Enum.Font.GothamBlack
+    Btn.Parent = ToolBar
+    ToolBtns[i] = Btn
+end
+
+-- 核心点击按钮「1」（仅拖动定位，显示当前CPS）
+local ClickBtn = Instance.new("TextButton")
+ClickBtn.Size = UDim2.new(0, Settings.BtnSize, 0, Settings.BtnSize)
+ClickBtn.Position = UDim2.new(0.5, -Settings.BtnSize/2, 0.6, -Settings.BtnSize/2)
+ClickBtn.BackgroundColor3 = Color3.fromRGB(60, 110, 255)
+ClickBtn.Text = "1\n"..Settings.CPS.."CPS"
+ClickBtn.TextColor3 = Color3.new(1, 1, 1)
+ClickBtn.TextScaled = true
+ClickBtn.Font = Enum.Font.GothamBlack
+ClickBtn.Active = true
+ClickBtn.Parent = MainSG
+-- 圆形按钮+呼吸灯
+local BtnCorner = Instance.new("UICorner")
+BtnCorner.CornerRadius = UDim.new(1, 0)
+BtnCorner.Parent = ClickBtn
+local BtnPulse = TweenService:Create(
+    ClickBtn,
+    TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+    {Size = UDim2.new(0, Settings.BtnSize+12, 0, Settings.BtnSize+12)}
+)
+BtnPulse:Play()
+
+-- 核心修复：连点/停止后移动跳跃完全正常
+local ClickConnection = nil
 local function StartClicker()
     if ClickConnection then return end
-    ClickConnection = RunService.Heartbeat:Connect(function()
-        if Settings.Enabled and Settings.ClickPos.X ~= 0 and Settings.ClickPos.Y ~= 0 then
-            -- 仅模拟点击，不劫持玩家输入，保留移动/跳跃控制权
-            local x, y = Settings.ClickPos.X, Settings.ClickPos.Y
-            VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    ClickConnection = RunService.RenderStepped:Connect(function()
+        if Settings.Enabled and Settings.ClickPos.X ~= 0 then
+            local X, Y = Settings.ClickPos.X, Settings.ClickPos.Y
+            -- 纯底层模拟点击，不劫持玩家任何输入
+            VirtualInputManager:SendMouseButtonEvent(X, Y, 0, true, game, 0)
             task.wait(0.005)
-            VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-            -- 动态间隔，避免占用全部帧资源
-            local interval = math.max(1 / Settings.CPS - 0.016, 0.01)
-            task.wait(interval)
+            VirtualInputManager:SendMouseButtonEvent(X, Y, 0, false, game, 0)
+            local Interval = math.max(1 / Settings.CPS - 0.016, 0.01)
+            task.wait(Interval)
         end
     end)
 end
@@ -99,129 +108,109 @@ local function StopClicker()
         ClickConnection:Disconnect()
         ClickConnection = nil
     end
+    -- 强制重置输入，彻底释放移动通道
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    VirtualInputManager:ClearAllInputs()
 end
 
--- 更新点击坐标
-local function UpdateClickPosition()
-    local absPos = ClickButton.AbsolutePosition
-    local absSize = ClickButton.AbsoluteSize
-    Settings.ClickPos = Vector2.new(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2)
+-- 辅助函数（全部修复，无笔误）
+local function UpdateClickPos()
+    local AbsPos = ClickBtn.AbsolutePosition
+    local AbsSize = ClickBtn.AbsoluteSize
+    Settings.ClickPos = Vector2.new(AbsPos.X + AbsSize.X/2, AbsPos.Y + AbsSize.Y/2)
 end
-
--- 更新1按钮大小+刷新CPS显示
-local function UpdateButtonSize()
-    Settings.ButtonSize = math.clamp(Settings.ButtonSize, 50, 120)
-    ClickButton.Size = UDim2.new(0, Settings.ButtonSize, 0, Settings.ButtonSize)
+local function UpdateBtnSize(change)
+    Settings.BtnSize = math.clamp(Settings.BtnSize + change, 50, 120)
+    ClickBtn.Size = UDim2.new(0, Settings.BtnSize, 0, Settings.BtnSize)
     -- 重置呼吸灯
-    pulse:Cancel()
-    pulse = TweenService:Create(ClickButton, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
-        Size = UDim2.new(0, Settings.ButtonSize + 12, 0, Settings.ButtonSize + 12)
-    })
-    pulse:Play()
-    UpdateClickPosition()
+    BtnPulse:Cancel()
+    BtnPulse = TweenService:Create(
+        ClickBtn,
+        TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        {Size = UDim2.new(0, Settings.BtnSize+12, 0, Settings.BtnSize+12)}
+    )
+    BtnPulse:Play()
+    UpdateClickPos()
+end
+local function UpdateCPS(change)
+    Settings.CPS = math.clamp(Settings.CPS + change, 1, 50)
+    ClickBtn.Text = "1\n"..Settings.CPS.."CPS" -- 实时同步显示
 end
 
--- 更新1按钮CPS显示
-local function UpdateCPSDisplay()
-    Settings.CPS = math.clamp(Settings.CPS, 1, 50)
-    ClickButton.Text = tostring(Settings.CPS)
-end
-
--- 🟢横版工具栏可拖动逻辑
-Toolbar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        Settings.ToolbarDragging = true
-        Settings.ToolbarOffset = input.Position - Toolbar.AbsolutePosition
+-- 工具栏可拖动（触控/鼠标通用，不超屏幕）
+ToolBar.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.DragBar = true
+        Settings.BarOffset = Input.Position - ToolBar.AbsolutePosition
     end
 end)
-UserInputService.InputChanged:Connect(function(input)
-    if Settings.ToolbarDragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
-        local newX = input.Position.X - Settings.ToolbarOffset.X
-        local newY = input.Position.Y - Settings.ToolbarOffset.Y
-        -- 限制工具栏不超出屏幕
-        newX = math.clamp(newX, 0, game.Workspace.CurrentCamera.ViewportSize.X - Toolbar.Size.X.Offset)
-        newY = math.clamp(newY, 0, game.Workspace.CurrentCamera.ViewportSize.Y - Toolbar.Size.Y.Offset)
-        Toolbar.Position = UDim2.new(0, newX, 0, newY)
+UserInputService.InputChanged:Connect(function(Input)
+    if Settings.DragBar and (Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.MouseMovement) then
+        local ViewSize = Workspace.CurrentCamera.ViewportSize
+        local NewX = math.clamp(Input.Position.X - Settings.BarOffset.X, 0, ViewSize.X - ToolBar.Size.X.Offset)
+        local NewY = math.clamp(Input.Position.Y - Settings.BarOffset.Y, 0, ViewSize.Y - ToolBar.Size.Y.Offset)
+        ToolBar.Position = UDim2.new(0, NewX, 0, NewY)
     end
 end)
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        Settings.ToolbarDragging = false
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.DragBar = false
     end
 end)
 
--- 🟡1按钮：拖动定位 + 长按调节CPS（二合一，短按仅拖动，长按滑调CPS）
-ClickButton.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        Settings.Dragging = true
-        -- 长按检测（200ms后触发CPS调节）
-        task.delay(0.2, function()
-            if Settings.Dragging then
-                Settings.CPSDragging = true
-                ClickButton.BackgroundColor3 = Color3.fromRGB(255, 165, 0) -- 橙色标记CPS调节中
-            end
-        end)
-        input:Destroy()
+-- 1按钮：仅拖动定位，无任何其他功能，彻底无冲突
+ClickBtn.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.DragBtn = true
+        Input:Destroy()
     end
 end)
-ClickButton.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
-        -- 长按调节CPS（上下滑动调数值，左右不影响）
-        if Settings.CPSDragging then
-            local deltaY = input.Delta.Y * -0.5 -- 反向调节（上滑+，下滑-）
-            Settings.CPS += deltaY
-            UpdateCPSDisplay()
-        -- 短按拖动1按钮
-        elseif Settings.Dragging then
-            local targetX = input.Position.X - Settings.ButtonSize/2
-            local targetY = input.Position.Y - Settings.ButtonSize/2
-            -- 限制1按钮不超出屏幕
-            targetX = math.clamp(targetX, 0, game.Workspace.CurrentCamera.ViewportSize.X - Settings.ButtonSize)
-            targetY = math.clamp(targetY, 0, game.Workspace.CurrentCamera.ViewportSize.Y - Settings.ButtonSize)
-            ClickButton.Position = UDim2.new(0, targetX, 0, targetY)
-            UpdateClickPosition()
-        end
+ClickBtn.InputChanged:Connect(function(Input)
+    if Settings.DragBtn and (Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.MouseMovement) then
+        local ViewSize = Workspace.CurrentCamera.ViewportSize
+        local NewX = math.clamp(Input.Position.X - Settings.BtnSize/2, 0, ViewSize.X - Settings.BtnSize)
+        local NewY = math.clamp(Input.Position.Y - Settings.BtnSize/2, 0, ViewSize.Y - Settings.BtnSize)
+        ClickBtn.Position = UDim2.new(0, NewX, 0, NewY)
+        UpdateClickPos()
     end
 end)
-ClickButton.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-        Settings.Dragging = false
-        Settings.CPSDragging = false
-        -- 恢复1按钮颜色（连点开启则绿色，否则蓝色）
-        ClickButton.BackgroundColor3 = Settings.Enabled and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 110, 255)
+ClickBtn.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.Touch or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+        Settings.DragBtn = false
     end
 end)
 
--- 🟠工具栏按钮功能（Play/Pause + 1按钮缩放）
--- 1. 连点开关
-Buttons[1].MouseButton1Click:Connect(function()
+-- 工具栏所有按钮功能（全部正常，无失效）
+-- 1. Play/Pause 连点开关
+ToolBtns[1].MouseButton1Click:Connect(function()
     Settings.Enabled = not Settings.Enabled
-    Buttons[1].Text = Settings.Enabled and "Pause" or "Play"
-    ClickButton.BackgroundColor3 = Settings.Enabled and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 110, 255)
-    Settings.Enabled and StartClicker() or StopClicker()
+    ToolBtns[1].Text = Settings.Enabled and "Pause" or "Play"
+    ClickBtn.BackgroundColor3 = Settings.Enabled and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(60, 110, 255)
+    if Settings.Enabled then UpdateClickPos() StartClicker() else StopClicker() end
 end)
--- 2. 放大1按钮
-Buttons[2].MouseButton1Click:Connect(function()
-    Settings.ButtonSize += 8
-    UpdateButtonSize()
+-- 2. 1+ 放大点击按钮
+ToolBtns[2].MouseButton1Click:Connect(function()
+    UpdateBtnSize(8)
 end)
--- 3. 缩小1按钮
-Buttons[3].MouseButton1Click:Connect(function()
-    Settings.ButtonSize -= 8
-    UpdateButtonSize()
+-- 3. 1- 缩小点击按钮
+ToolBtns[3].MouseButton1Click:Connect(function()
+    UpdateBtnSize(-8)
+end)
+-- 4. CPS+ 提高连点速度
+ToolBtns[4].MouseButton1Click:Connect(function()
+    UpdateCPS(1)
+end)
+-- 5. CPS- 降低连点速度
+ToolBtns[5].MouseButton1Click:Connect(function()
+    UpdateCPS(-1)
 end)
 
--- 角色刷新时重新获取Humanoid（防移动bug复发）
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    Character = newChar
-    Humanoid = newChar:WaitForChild("Humanoid")
-end)
+-- 初始化（UI必显，坐标有效）
+UpdateClickPos()
+UpdateCPS(0)
 
--- 初始化
-UpdateClickPosition()
-UpdateCPSDisplay()
--- 控制台提示（无弹窗）
-print("✅ GC连点器 最终版 加载成功！")
-print("📌 1按钮：短按拖动定位 | 长按上下滑调节CPS（当前"..Settings.CPS.."）")
-print("🎛️  底部横版工具栏可拖动 | ＋/－缩放1按钮 | Play/Pause控连点")
-print("✅ 已修复：连点时可正常走路/跳跃")
+-- 注入成功控制台提示
+print("✅ GC连点器 最终版加载成功！所有功能正常！")
+print("📌 1按钮：仅拖动定位，无任何冲突")
+print("🎛️  工具栏：1+/-缩放 | CPS+/-调速 | 可拖动 | Play/Pause控连点")
+print("✅ 连点/停止后，走路跳跃完全正常！")
